@@ -126,19 +126,56 @@ pub async fn run<
                     log::warn!("genesis refused: not node #0 booted on empty storage");
                     continue;
                 }
-                match bc.process_genesis(currency, genesis_chain_config) {
-                    Ok(blocks) => {
-                        log::info!(
-                            "genesis: block #0 {:02x?}, block #1 {:02x?}",
-                            blocks.block_zero.hash(),
-                            blocks.block_one.hash()
-                        );
-                        // Genesis returns no `NextCall`; ask for the first one.
-                        next = bc.on_tick(now_ms()).1;
-                    }
-                    Err(reason) => log::warn!("genesis refused: {}", genesis_reject_name(&reason)),
+                if let Some(after) = found_chain(bc, currency, genesis_chain_config) {
+                    next = after;
                 }
             }
+        }
+    }
+}
+
+/// Runs node #0's genesis and returns the first `NextCall` on success.
+///
+/// Out of line on purpose: the two genesis blocks (about 2 KB each) then live in
+/// this frame, which is popped before the next call into the blockchain,
+/// instead of in `run`'s poll frame, which stays under every later call
+/// (Story 12.1 AC7).
+#[inline(never)]
+fn found_chain<
+    C: CryptoTrait,
+    S: StorageTrait,
+    const MAX_NODES: usize,
+    const SNAKE_CHAIN_LENGTH_MAX: u32,
+    const MAX_BLOCKS: usize,
+    const MAX_BRANCH_COUNT: usize,
+    const MAX_BLOCK_UTXO_OUTPUT: usize,
+>(
+    bc: &mut Blockchain<
+        C,
+        S,
+        ChainConfiguration<NoopConfigChangeSink>,
+        MAX_NODES,
+        SNAKE_CHAIN_LENGTH_MAX,
+        MAX_BLOCKS,
+        MAX_BRANCH_COUNT,
+        MAX_BLOCK_UTXO_OUTPUT,
+    >,
+    currency: u64,
+    genesis_chain_config: &[u8],
+) -> Option<NextCall> {
+    match bc.process_genesis(currency, genesis_chain_config) {
+        Ok(blocks) => {
+            log::info!(
+                "genesis: block #0 {:02x?}, block #1 {:02x?}",
+                blocks.block_zero.hash(),
+                blocks.block_one.hash()
+            );
+            // Genesis returns no `NextCall`; ask for the first one.
+            Some(bc.on_tick(now_ms()).1)
+        }
+        Err(reason) => {
+            log::warn!("genesis refused: {}", genesis_reject_name(&reason));
+            None
         }
     }
 }
