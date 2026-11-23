@@ -105,22 +105,14 @@ pub async fn run<
     // in-place initialization design, MoonBlokz part X/2).
     embassy_futures::yield_now().await;
 
-    let (outcome, mut next) = bc.initialize_from_storage(now_ms());
-    log::info!("boot: {}", init_outcome_name(&outcome));
+    let (started_collecting, mut next) = restore(bc);
     // `StartedCollecting` is the only proof that durable storage is empty;
     // `process_genesis` itself checks only in-memory state (DEC-292).
-    let may_found_chain = local_node_id == 0 && matches!(outcome, InitOutcome::StartedCollecting);
+    let may_found_chain = local_node_id == 0 && started_collecting;
 
     loop {
         match select(wait_until(&next), commands.receive()).await {
-            Either::First(()) => {
-                let (tick, after) = bc.on_tick(now_ms());
-                if let TickOutcome::SendParentRecoveryRequest(_) = tick {
-                    // The radio mapping (FR66) is a later Epic 12 story.
-                    log::debug!("tick: parent-recovery request (radio not wired; dropped)");
-                }
-                next = after;
-            }
+            Either::First(()) => next = tick(bc),
             Either::Second(LocalCommand::Genesis { currency }) => {
                 if !may_found_chain {
                     log::warn!("genesis refused: not node #0 booted on empty storage");
@@ -132,6 +124,68 @@ pub async fn run<
             }
         }
     }
+}
+
+// The blockchain calls run out of line (`restore`, `tick`, `found_chain`): what
+// they keep on the stack is then popped when they return, instead of widening
+// `run`'s poll frame, which stays under every later call (Story 12.1 AC7).
+
+/// `initialize_from_storage`, logged; `true` when the node started collecting
+/// on empty storage.
+#[inline(never)]
+fn restore<
+    C: CryptoTrait,
+    S: StorageTrait,
+    const MAX_NODES: usize,
+    const SNAKE_CHAIN_LENGTH_MAX: u32,
+    const MAX_BLOCKS: usize,
+    const MAX_BRANCH_COUNT: usize,
+    const MAX_BLOCK_UTXO_OUTPUT: usize,
+>(
+    bc: &mut Blockchain<
+        C,
+        S,
+        ChainConfiguration<NoopConfigChangeSink>,
+        MAX_NODES,
+        SNAKE_CHAIN_LENGTH_MAX,
+        MAX_BLOCKS,
+        MAX_BRANCH_COUNT,
+        MAX_BLOCK_UTXO_OUTPUT,
+    >,
+) -> (bool, NextCall) {
+    let (outcome, next) = bc.initialize_from_storage(now_ms());
+    log::info!("boot: {}", init_outcome_name(&outcome));
+    (matches!(outcome, InitOutcome::StartedCollecting), next)
+}
+
+/// `on_tick` at the deadline; returns the next one.
+#[inline(never)]
+fn tick<
+    C: CryptoTrait,
+    S: StorageTrait,
+    const MAX_NODES: usize,
+    const SNAKE_CHAIN_LENGTH_MAX: u32,
+    const MAX_BLOCKS: usize,
+    const MAX_BRANCH_COUNT: usize,
+    const MAX_BLOCK_UTXO_OUTPUT: usize,
+>(
+    bc: &mut Blockchain<
+        C,
+        S,
+        ChainConfiguration<NoopConfigChangeSink>,
+        MAX_NODES,
+        SNAKE_CHAIN_LENGTH_MAX,
+        MAX_BLOCKS,
+        MAX_BRANCH_COUNT,
+        MAX_BLOCK_UTXO_OUTPUT,
+    >,
+) -> NextCall {
+    let (outcome, next) = bc.on_tick(now_ms());
+    if let TickOutcome::SendParentRecoveryRequest(_) = outcome {
+        // The radio mapping (FR66) is a later Epic 12 story.
+        log::debug!("tick: parent-recovery request (radio not wired; dropped)");
+    }
+    next
 }
 
 /// Runs node #0's genesis and returns the first `NextCall` on success.
@@ -171,7 +225,7 @@ fn found_chain<
                 blocks.block_one.hash()
             );
             // Genesis returns no `NextCall`; ask for the first one.
-            Some(bc.on_tick(now_ms()).1)
+            Some(tick(bc))
         }
         Err(reason) => {
             log::warn!("genesis refused: {}", genesis_reject_name(&reason));
