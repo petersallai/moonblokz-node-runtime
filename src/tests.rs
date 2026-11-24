@@ -1,16 +1,15 @@
 //! Host tests for [`run`]: boot outcomes, the genesis guard, restart, and the
 //! `NextCall` → timer mapping. Time is embassy-time's mock driver, so nothing
-//! sleeps; `run` never returns, so a test polls it until it waits and then
-//! drops it ("reboot" = drop and call `run` again on the same storage).
+//! sleeps; `run` never returns, so a test polls it until its commands are
+//! consumed and then drops it ("reboot" = drop and call `run` again on the same
+//! storage). The storage is lent as `&mut`, the way the firmware lends it.
 
 extern crate std;
 
 use core::cell::RefCell;
-use core::future::Future;
-use core::pin::Pin;
+use core::pin::pin;
 use core::task::Poll;
 use std::boxed::Box;
-use std::cell::RefCell as StdRefCell;
 use std::string::{String, ToString};
 use std::vec::Vec;
 
@@ -18,12 +17,10 @@ use embassy_futures::poll_once;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, MockDriver};
-use moonblokz_chain_types::{Block, MAX_BLOCK_SIZE};
+use moonblokz_chain_types::MAX_BLOCK_SIZE;
 use moonblokz_configuration::parameter;
 use moonblokz_crypto::{Crypto, PRIVATE_KEY_SIZE, PublicKeyTrait};
-use moonblokz_storage::{
-    ControlPlaneData, INIT_PARAMS_SIZE, MemoryBackend, StorageError, StorageIndex,
-};
+use moonblokz_storage::{INIT_PARAMS_SIZE, MemoryBackend};
 
 use super::*;
 
@@ -66,44 +63,9 @@ static CONTENT: [u8; 23] = [
 
 const NODE_ZERO_KEY: [u8; PRIVATE_KEY_SIZE] = [1; PRIVATE_KEY_SIZE];
 
-/// `run` consumes its storage; the test keeps the backend outside it.
-struct Shared<'a>(&'a RefCell<Backend>);
-
-impl StorageTrait for Shared<'_> {
-    fn init(
-        &mut self,
-        private_key: [u8; PRIVATE_KEY_SIZE],
-        own_node_id: u32,
-        init_params: [u8; INIT_PARAMS_SIZE],
-    ) -> Result<(), StorageError> {
-        self.0
-            .borrow_mut()
-            .init(private_key, own_node_id, init_params)
-    }
-    fn save_block(&mut self, index: StorageIndex, block: &Block) -> Result<(), StorageError> {
-        self.0.borrow_mut().save_block(index, block)
-    }
-    fn read_block_into(
-        &self,
-        index: StorageIndex,
-        out: &mut [u8; MAX_BLOCK_SIZE],
-    ) -> Result<(), StorageError> {
-        self.0.borrow().read_block_into(index, out)
-    }
-    fn capacity(&self) -> StorageIndex {
-        self.0.borrow().capacity()
-    }
-    fn set_chain_configuration(&mut self, block: &Block) -> Result<(), StorageError> {
-        self.0.borrow_mut().set_chain_configuration(block)
-    }
-    fn load_control_data(&mut self) -> Result<ControlPlaneData, StorageError> {
-        self.0.borrow_mut().load_control_data()
-    }
-}
-
 // A logger that keeps each test thread's lines, so parallel tests do not mix.
 std::thread_local! {
-    static LINES: StdRefCell<Vec<String>> = const { StdRefCell::new(Vec::new()) };
+    static LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 struct Capture;
 impl log::Log for Capture {
@@ -123,13 +85,13 @@ fn take_lines() -> Vec<String> {
     LINES.with(|lines| core::mem::take(&mut *lines.borrow_mut()))
 }
 
-fn provisioned(node_id: u32, key: [u8; PRIVATE_KEY_SIZE]) -> RefCell<Backend> {
-    let mut backend = Backend::new();
+fn provisioned(node_id: u32, key: [u8; PRIVATE_KEY_SIZE]) -> Box<Backend> {
+    let mut backend = Box::new(Backend::new());
     backend
         .init(key, node_id, [0; INIT_PARAMS_SIZE])
         .ok()
         .expect("the test backend initializes");
-    RefCell::new(backend)
+    backend
 }
 
 fn crypto(key: [u8; PRIVATE_KEY_SIZE]) -> Crypto {
@@ -140,19 +102,21 @@ fn anchor() -> [u8; PUBLIC_KEY_SIZE] {
     *crypto(NODE_ZERO_KEY).public_key().serialize()
 }
 
-/// Boots one node on `storage`, delivers `commands`, and polls `run` until it
-/// waits; returns the log lines it produced.
+/// Upper bound on polls; `run` waits within a handful once its channel is empty.
+const MAX_POLLS: usize = 64;
+
+/// Boots one node on `storage`, delivers `commands`, and polls `run` until every
+/// command is consumed and it waits; returns the log lines it produced.
 fn boot(
-    storage: &RefCell<Backend>,
+    storage: &mut Backend,
     node_id: u32,
     key: [u8; PRIVATE_KEY_SIZE],
     anchor: [u8; PUBLIC_KEY_SIZE],
-    commands: &[LocalCommand],
+    commands: &[u64],
 ) -> Vec<String> {
     take_lines();
     let channel = Channel::<NoopRawMutex, LocalCommand, 4>::new();
-    for command in commands {
-        let LocalCommand::Genesis { currency } = command;
+    for currency in commands {
         channel
             .try_send(LocalCommand::Genesis {
                 currency: *currency,
@@ -160,36 +124,44 @@ fn boot(
             .ok()
             .expect("room in the test channel");
     }
-    let mut node: Pin<Box<_>> = Box::pin(run::<
-        Crypto,
-        Shared<'_>,
-        NoopRawMutex,
-        4,
-        MAX_NODES,
-        W,
-        MAX_BLOCKS,
-        MAX_BRANCH_COUNT,
-        MAX_BLOCK_UTXO_OUTPUT,
-    >(
-        crypto(key),
-        Shared(storage),
-        node_id,
-        anchor,
-        7,
-        &CONTENT,
-        channel.receiver(),
-    ));
-    // The load-bearing yield, the boot, then one round per queued command.
-    for _ in 0..commands.len() + 3 {
-        assert!(poll_once(node.as_mut()).is_pending(), "run never returns");
+    {
+        let mut node = pin!(run::<
+            Crypto,
+            &mut Backend,
+            NoopRawMutex,
+            4,
+            MAX_NODES,
+            W,
+            MAX_BLOCKS,
+            MAX_BRANCH_COUNT,
+            MAX_BLOCK_UTXO_OUTPUT,
+        >(
+            crypto(key),
+            storage,
+            node_id,
+            anchor,
+            7,
+            &CONTENT,
+            channel.receiver(),
+        ));
+        // Past the load-bearing yield and the boot, until the commands are taken;
+        // one more poll lets the last one finish.
+        let mut polls = 0;
+        loop {
+            let _ = poll_once(node.as_mut());
+            polls += 1;
+            if channel.is_empty() || polls == MAX_POLLS {
+                break;
+            }
+        }
+        let _ = poll_once(node.as_mut());
+        assert!(channel.is_empty(), "run did not consume its commands");
     }
-    drop(node);
     take_lines()
 }
 
-fn holds_genesis(storage: &RefCell<Backend>) -> bool {
-    let backend = storage.borrow();
-    backend.read_block(0).is_ok() && backend.read_block(1).is_ok()
+fn holds_genesis(storage: &Backend) -> bool {
+    storage.read_block(0).is_ok() && storage.read_block(1).is_ok()
 }
 
 fn has(lines: &[String], text: &str) -> bool {
@@ -198,23 +170,15 @@ fn has(lines: &[String], text: &str) -> bool {
 
 #[test]
 fn a_fresh_node_starts_collecting() {
-    let storage = provisioned(3, [3; PRIVATE_KEY_SIZE]);
-    let lines = boot(&storage, 3, [3; PRIVATE_KEY_SIZE], anchor(), &[]);
+    let mut storage = provisioned(3, [3; PRIVATE_KEY_SIZE]);
+    let lines = boot(&mut storage, 3, [3; PRIVATE_KEY_SIZE], anchor(), &[]);
     assert!(has(&lines, "boot: StartedCollecting"), "{lines:?}");
 }
 
 #[test]
 fn node_zero_founds_the_chain_on_genesis() {
-    let storage = provisioned(0, NODE_ZERO_KEY);
-    let lines = boot(
-        &storage,
-        0,
-        NODE_ZERO_KEY,
-        anchor(),
-        &[LocalCommand::Genesis {
-            currency: 1_000_000,
-        }],
-    );
+    let mut storage = provisioned(0, NODE_ZERO_KEY);
+    let lines = boot(&mut storage, 0, NODE_ZERO_KEY, anchor(), &[1_000_000]);
     assert!(has(&lines, "boot: StartedCollecting"), "{lines:?}");
     assert!(has(&lines, "genesis: block #0"), "{lines:?}");
     assert!(holds_genesis(&storage));
@@ -222,62 +186,39 @@ fn node_zero_founds_the_chain_on_genesis() {
 
 #[test]
 fn a_non_zero_node_refuses_genesis() {
-    let storage = provisioned(3, [3; PRIVATE_KEY_SIZE]);
+    let mut storage = provisioned(3, [3; PRIVATE_KEY_SIZE]);
     let lines = boot(
-        &storage,
+        &mut storage,
         3,
         [3; PRIVATE_KEY_SIZE],
         anchor(),
-        &[LocalCommand::Genesis {
-            currency: 1_000_000,
-        }],
+        &[1_000_000],
     );
     assert!(has(&lines, "genesis refused: not node #0"), "{lines:?}");
-    assert!(storage.borrow().read_block(0).is_err());
+    assert!(storage.read_block(0).is_err());
 }
 
 #[test]
 fn a_key_that_is_not_the_anchor_founds_nothing() {
-    let storage = provisioned(0, [2; PRIVATE_KEY_SIZE]);
+    let mut storage = provisioned(0, [2; PRIVATE_KEY_SIZE]);
     let lines = boot(
-        &storage,
+        &mut storage,
         0,
         [2; PRIVATE_KEY_SIZE],
         anchor(),
-        &[LocalCommand::Genesis {
-            currency: 1_000_000,
-        }],
+        &[1_000_000],
     );
     assert!(has(&lines, "genesis refused: KeyMismatch"), "{lines:?}");
-    assert!(storage.borrow().read_block(0).is_err());
+    assert!(storage.read_block(0).is_err());
 }
 
 #[test]
 fn a_restarted_node_zero_resumes_and_refuses_a_second_genesis() {
-    let storage = provisioned(0, NODE_ZERO_KEY);
-    boot(
-        &storage,
-        0,
-        NODE_ZERO_KEY,
-        anchor(),
-        &[LocalCommand::Genesis {
-            currency: 1_000_000,
-        }],
-    );
-    let first = storage
-        .borrow()
-        .read_block(0)
-        .ok()
-        .expect("block #0")
-        .hash();
+    let mut storage = provisioned(0, NODE_ZERO_KEY);
+    boot(&mut storage, 0, NODE_ZERO_KEY, anchor(), &[1_000_000]);
+    let first = storage.read_block(0).ok().expect("block #0").hash();
 
-    let lines = boot(
-        &storage,
-        0,
-        NODE_ZERO_KEY,
-        anchor(),
-        &[LocalCommand::Genesis { currency: 5 }],
-    );
+    let lines = boot(&mut storage, 0, NODE_ZERO_KEY, anchor(), &[5]);
     assert!(has(&lines, "boot: ResumedReady"), "{lines:?}");
     // The boot guard refuses before `process_genesis` is reached.
     assert!(
@@ -287,13 +228,24 @@ fn a_restarted_node_zero_resumes_and_refuses_a_second_genesis() {
         ),
         "{lines:?}"
     );
-    let after = storage
-        .borrow()
-        .read_block(0)
-        .ok()
-        .expect("block #0")
-        .hash();
+    let after = storage.read_block(0).ok().expect("block #0").hash();
     assert_eq!(first, after, "the durable chain is untouched");
+}
+
+/// A chain stored under one anchor, booted by firmware baked with another: the
+/// restart refuses the stored configuration and says what to do (DN1).
+#[test]
+fn a_firmware_that_does_not_match_the_stored_chain_says_so() {
+    let mut storage = provisioned(0, NODE_ZERO_KEY);
+    boot(&mut storage, 0, NODE_ZERO_KEY, anchor(), &[1_000_000]);
+    let other_anchor = *crypto([2; PRIVATE_KEY_SIZE]).public_key().serialize();
+
+    let lines = boot(&mut storage, 0, NODE_ZERO_KEY, other_anchor, &[]);
+    assert!(
+        has(&lines, "boot: Rejected(ChainConfigUnusable)"),
+        "{lines:?}"
+    );
+    assert!(has(&lines, "flash the matching build"), "{lines:?}");
 }
 
 #[test]
@@ -301,14 +253,10 @@ fn next_call_at_resolves_at_its_deadline_and_idle_never_does() {
     let deadline = now_ms() + 100;
     let at = NextCall::At(deadline);
     let idle = NextCall::Idle;
-    let mut timer = Box::pin(wait_until(&at));
-    let mut never = Box::pin(wait_until(&idle));
+    let mut timer = pin!(wait_until(&at));
+    let mut never = pin!(wait_until(&idle));
     assert!(poll_once(timer.as_mut()).is_pending());
     MockDriver::get().advance(Duration::from_millis(100));
     assert_eq!(poll_once(timer.as_mut()), Poll::Ready(()));
     assert!(poll_once(never.as_mut()).is_pending());
 }
-
-// Silence the unused-import lint for the `Future` bound the pins rely on.
-#[allow(dead_code)]
-fn _assert_future<F: Future>(_: &F) {}

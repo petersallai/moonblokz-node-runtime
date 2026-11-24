@@ -40,8 +40,10 @@ pub enum LocalCommand {
 /// **Placement (DEC-290).** The `Blockchain` is a local of this function and
 /// stays alive across its suspend points, so it is a field of this future, and
 /// through the caller's `#[embassy_executor::task]` it lives in that task's
-/// static `TaskStorage`, not on a stack. `crypto` and `storage` are moved in by
-/// value; the board measures what that costs (Story 12.1 AC7).
+/// static `TaskStorage`, not on a stack. `crypto` and `storage` are taken by
+/// value; the board lends its storage as `&mut`, so the backend itself stays in
+/// the board's task once (DEC-297), and measures what the copies cost (Story
+/// 12.1 AC7).
 #[allow(clippy::too_many_arguments)]
 pub async fn run<
     C: CryptoTrait,
@@ -154,8 +156,34 @@ fn restore<
     >,
 ) -> (bool, NextCall) {
     let (outcome, next) = bc.initialize_from_storage(now_ms());
-    log::info!("boot: {}", init_outcome_name(&outcome));
+    log_boot(&outcome);
     (matches!(outcome, InitOutcome::StartedCollecting), next)
+}
+
+/// Logs the boot outcome. Out of line, so its formatting temporaries do not
+/// widen `restore`'s frame, which stays under the whole FR3 pass.
+#[inline(never)]
+fn log_boot(outcome: &InitOutcome) {
+    let InitOutcome::Rejected(reason) = outcome else {
+        log::info!("boot: {}", init_outcome_name(outcome));
+        return;
+    };
+    // The node cannot serve a chain. Usually the firmware does not match the
+    // stored chain (anchor, signature scheme, block-size tier, or a `MAX_NODES`
+    // below the chain's node cap), and flashing the matching build recovers it
+    // without erasing anything (Story 12.1 DN1).
+    let hint = match reason {
+        RestartRejectReason::ControlPlaneUnreadable => {
+            "the storage failed while reading; check the flash, or erase (/E_) and re-provision"
+        }
+        RestartRejectReason::ChainConfigUnusable | RestartRejectReason::NoUsableTree => {
+            "the stored chain does not match this firmware: flash the matching build (erasing with /E_ loses the chain)"
+        }
+        RestartRejectReason::AlreadyInitialized => {
+            "internal: the blockchain was already initialized"
+        }
+    };
+    log::error!("boot: {}; {}", init_outcome_name(outcome), hint);
 }
 
 /// `on_tick` at the deadline; returns the next one.
@@ -181,9 +209,13 @@ fn tick<
     >,
 ) -> NextCall {
     let (outcome, next) = bc.on_tick(now_ms());
-    if let TickOutcome::SendParentRecoveryRequest(_) = outcome {
+    // Exhaustive, so an added outcome is a compile error here.
+    match outcome {
+        TickOutcome::Idle => {}
         // The radio mapping (FR66) is a later Epic 12 story.
-        log::debug!("tick: parent-recovery request (radio not wired; dropped)");
+        TickOutcome::SendParentRecoveryRequest(_) => {
+            log::debug!("tick: parent-recovery request (radio not wired; dropped)")
+        }
     }
     next
 }
