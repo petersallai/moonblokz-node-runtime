@@ -174,10 +174,10 @@ fn log_boot(outcome: &InitOutcome) {
     // without erasing anything (Story 12.1 DN1).
     let hint = match reason {
         RestartRejectReason::ControlPlaneUnreadable => {
-            "the storage failed while reading; check the flash, or erase (/E_) and re-provision"
+            "the storage failed while reading; check the flash, or erase the flash and re-provision"
         }
         RestartRejectReason::ChainConfigUnusable | RestartRejectReason::NoUsableTree => {
-            "the stored chain does not match this firmware: flash the matching build (erasing with /E_ loses the chain)"
+            "the stored chain does not match this firmware: flash the matching build (erasing the flash loses the chain)"
         }
         RestartRejectReason::AlreadyInitialized => {
             "internal: the blockchain was already initialized"
