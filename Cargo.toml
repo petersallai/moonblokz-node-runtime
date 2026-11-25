@@ -1,0 +1,65 @@
+[package]
+name = "moonblokz-node-runtime"
+version = "0.1.0"
+edition = "2024"
+description = "MoonBlokz node runtime: the hardware-independent bridge that boots and drives the blockchain on embassy."
+license = "MIT"
+repository = "https://github.com/petersallai/moonblokz-node-runtime"
+keywords = ["embedded", "no-std", "blockchain", "moonblokz", "embassy"]
+categories = ["embedded", "no-std"]
+
+[dependencies]
+# No crypto or storage backend is pinned here: the board binary (or a host test)
+# chooses them, and the signature scheme is forwarded down through `[features]`.
+moonblokz-blockchain = { path = "../moonblokz-blockchain", default-features = false }
+moonblokz-configuration = { path = "../moonblokz-configuration", default-features = false }
+moonblokz-crypto = { path = "../moonblokz-crypto-lib", default-features = false }
+moonblokz-storage = { path = "../moonblokz-storage", default-features = false }
+embassy-futures = "0.1"
+embassy-sync = "0.7"
+embassy-time = "0.5"
+log = "0.4"
+
+[features]
+# The signature scheme (DEC-246) and the block-size tier (DEC-220) are forwarded
+# to the blockchain, which forwards them to every crate that carries one.
+default = ["schnorr", "block-size-2016"]
+block-size-2016 = ["moonblokz-blockchain/block-size-2016"]
+block-size-65536 = ["moonblokz-blockchain/block-size-65536"]
+schnorr = ["moonblokz-blockchain/schnorr"]
+bls-min-sig = ["moonblokz-blockchain/bls-min-sig"]
+bls-min-pk = ["moonblokz-blockchain/bls-min-pk"]
+
+[dev-dependencies]
+# Host tests: the in-memory storage backend, embassy-time's mock driver (time
+# advances only when a test says so) with an executor-free timer queue, and a
+# std critical section for it.
+moonblokz-storage = { path = "../moonblokz-storage", default-features = false, features = ["backend-memory"] }
+moonblokz-chain-types = { path = "../moonblokz-chain-types", default-features = false }
+embassy-time = { version = "0.5", features = ["mock-driver", "generic-queue-8"] }
+critical-section = { version = "1", features = ["std"] }
+
+# Debug test runs build the curve code optimized (DEC-255): a BLS genesis in an
+# unoptimized build is very slow. Only takes effect when this crate is the Cargo root.
+[profile.dev.package.moonblokz-crypto]
+opt-level = 3
+[profile.dev.package.k256]
+opt-level = 3
+[profile.dev.package.primeorder]
+opt-level = 3
+[profile.dev.package.elliptic-curve]
+opt-level = 3
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+[profile.dev.package.bls12_381]
+opt-level = 3
+[profile.dev.package.ff]
+opt-level = 3
+[profile.dev.package.group]
+opt-level = 3
+[profile.dev.package.pairing]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.subtle]
+opt-level = 3
