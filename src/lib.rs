@@ -54,7 +54,7 @@ pub async fn run<
     const SNAKE_CHAIN_LENGTH_MAX: u32,
     const MAX_BLOCKS: usize,
     const MAX_BRANCH_COUNT: usize,
-    const MAX_BLOCK_UTXO_OUTPUT: usize,
+    const AVAILABLE_UTXO_BYTES: usize,
 >(
     crypto: C,
     storage: S,
@@ -75,7 +75,7 @@ pub async fn run<
             SNAKE_CHAIN_LENGTH_MAX,
             MAX_BLOCKS,
             MAX_BRANCH_COUNT,
-            MAX_BLOCK_UTXO_OUTPUT,
+            AVAILABLE_UTXO_BYTES,
         >,
     > = MaybeUninit::uninit();
     let chain_config = ChainConfiguration::new(
@@ -87,7 +87,7 @@ pub async fn run<
             SNAKE_CHAIN_LENGTH_MAX,
             MAX_BLOCKS,
             MAX_BRANCH_COUNT,
-            MAX_BLOCK_UTXO_OUTPUT,
+            AVAILABLE_UTXO_BYTES,
         >::BUILD_LIMITS,
     );
     let bc = Blockchain::init(
@@ -142,7 +142,7 @@ fn restore<
     const SNAKE_CHAIN_LENGTH_MAX: u32,
     const MAX_BLOCKS: usize,
     const MAX_BRANCH_COUNT: usize,
-    const MAX_BLOCK_UTXO_OUTPUT: usize,
+    const AVAILABLE_UTXO_BYTES: usize,
 >(
     bc: &mut Blockchain<
         C,
@@ -152,7 +152,7 @@ fn restore<
         SNAKE_CHAIN_LENGTH_MAX,
         MAX_BLOCKS,
         MAX_BRANCH_COUNT,
-        MAX_BLOCK_UTXO_OUTPUT,
+        AVAILABLE_UTXO_BYTES,
     >,
 ) -> (bool, NextCall) {
     let (outcome, next) = bc.initialize_from_storage(now_ms());
@@ -195,7 +195,7 @@ fn tick<
     const SNAKE_CHAIN_LENGTH_MAX: u32,
     const MAX_BLOCKS: usize,
     const MAX_BRANCH_COUNT: usize,
-    const MAX_BLOCK_UTXO_OUTPUT: usize,
+    const AVAILABLE_UTXO_BYTES: usize,
 >(
     bc: &mut Blockchain<
         C,
@@ -205,7 +205,7 @@ fn tick<
         SNAKE_CHAIN_LENGTH_MAX,
         MAX_BLOCKS,
         MAX_BRANCH_COUNT,
-        MAX_BLOCK_UTXO_OUTPUT,
+        AVAILABLE_UTXO_BYTES,
     >,
 ) -> NextCall {
     let (outcome, next) = bc.on_tick(now_ms());
@@ -234,7 +234,7 @@ fn found_chain<
     const SNAKE_CHAIN_LENGTH_MAX: u32,
     const MAX_BLOCKS: usize,
     const MAX_BRANCH_COUNT: usize,
-    const MAX_BLOCK_UTXO_OUTPUT: usize,
+    const AVAILABLE_UTXO_BYTES: usize,
 >(
     bc: &mut Blockchain<
         C,
@@ -244,7 +244,7 @@ fn found_chain<
         SNAKE_CHAIN_LENGTH_MAX,
         MAX_BLOCKS,
         MAX_BRANCH_COUNT,
-        MAX_BLOCK_UTXO_OUTPUT,
+        AVAILABLE_UTXO_BYTES,
     >,
     currency: u64,
     genesis_chain_config: &[u8],

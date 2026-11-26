@@ -30,7 +30,8 @@ const W: u32 = 16;
 const H: u32 = 8;
 const MAX_BLOCKS: usize = W as usize + 2 * H as usize;
 const MAX_BRANCH_COUNT: usize = 4;
-const MAX_BLOCK_UTXO_OUTPUT: usize = 16;
+/// The production bitfield bytes (DEC-318).
+const AVAILABLE_UTXO_BYTES: usize = 4;
 type Backend = MemoryBackend<{ 8 * MAX_BLOCK_SIZE + 8000 }>;
 
 /// Chain-config content: `W`, `H`, the node cap and the build's scheme; every
@@ -134,7 +135,7 @@ fn boot(
             W,
             MAX_BLOCKS,
             MAX_BRANCH_COUNT,
-            MAX_BLOCK_UTXO_OUTPUT,
+            AVAILABLE_UTXO_BYTES,
         >(
             crypto(key),
             storage,
