@@ -32,6 +32,9 @@ const MAX_BLOCKS: usize = W as usize + 2 * H as usize;
 const MAX_BRANCH_COUNT: usize = 4;
 /// The production bitfield bytes (DEC-318).
 const AVAILABLE_UTXO_BYTES: usize = 4;
+/// A one-block mempool, the smallest the crate admits (DEC-351).
+const MEMPOOL_COMPACT_BYTES: usize = MAX_BLOCK_SIZE;
+const MEMPOOL_MAX_ENTRIES: usize = 16;
 type Backend = MemoryBackend<{ 8 * MAX_BLOCK_SIZE + 8000 }>;
 
 /// Chain-config content: `W`, `H`, the node cap and the build's scheme; every
@@ -136,6 +139,8 @@ fn boot(
             MAX_BLOCKS,
             MAX_BRANCH_COUNT,
             AVAILABLE_UTXO_BYTES,
+            MEMPOOL_COMPACT_BYTES,
+            MEMPOOL_MAX_ENTRIES,
         >(
             crypto(key),
             storage,

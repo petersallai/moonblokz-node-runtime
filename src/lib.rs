@@ -55,6 +55,8 @@ pub async fn run<
     const MAX_BLOCKS: usize,
     const MAX_BRANCH_COUNT: usize,
     const AVAILABLE_UTXO_BYTES: usize,
+    const MEMPOOL_COMPACT_BYTES: usize,
+    const MEMPOOL_MAX_ENTRIES: usize,
 >(
     crypto: C,
     storage: S,
@@ -64,8 +66,17 @@ pub async fn run<
     genesis_chain_config: &'static [u8],
     commands: Receiver<'_, M, LocalCommand, Q>,
 ) -> ! {
-    type Chain<C, S, const N: usize, const W: u32, const B: usize, const R: usize, const U: usize> =
-        Blockchain<C, S, ChainConfiguration<NoopConfigChangeSink>, N, W, B, R, U>;
+    type Chain<
+        C,
+        S,
+        const N: usize,
+        const W: u32,
+        const B: usize,
+        const R: usize,
+        const U: usize,
+        const MB: usize,
+        const ME: usize,
+    > = Blockchain<C, S, ChainConfiguration<NoopConfigChangeSink>, N, W, B, R, U, MB, ME>;
 
     let mut slot: MaybeUninit<
         Chain<
@@ -76,6 +87,8 @@ pub async fn run<
             MAX_BLOCKS,
             MAX_BRANCH_COUNT,
             AVAILABLE_UTXO_BYTES,
+            MEMPOOL_COMPACT_BYTES,
+            MEMPOOL_MAX_ENTRIES,
         >,
     > = MaybeUninit::uninit();
     let chain_config = ChainConfiguration::new(
@@ -88,6 +101,8 @@ pub async fn run<
             MAX_BLOCKS,
             MAX_BRANCH_COUNT,
             AVAILABLE_UTXO_BYTES,
+            MEMPOOL_COMPACT_BYTES,
+            MEMPOOL_MAX_ENTRIES,
         >::BUILD_LIMITS,
     );
     let bc = Blockchain::init(
@@ -143,6 +158,8 @@ fn restore<
     const MAX_BLOCKS: usize,
     const MAX_BRANCH_COUNT: usize,
     const AVAILABLE_UTXO_BYTES: usize,
+    const MEMPOOL_COMPACT_BYTES: usize,
+    const MEMPOOL_MAX_ENTRIES: usize,
 >(
     bc: &mut Blockchain<
         C,
@@ -153,6 +170,8 @@ fn restore<
         MAX_BLOCKS,
         MAX_BRANCH_COUNT,
         AVAILABLE_UTXO_BYTES,
+        MEMPOOL_COMPACT_BYTES,
+        MEMPOOL_MAX_ENTRIES,
     >,
 ) -> (bool, NextCall) {
     let (outcome, next) = bc.initialize_from_storage(now_ms());
@@ -196,6 +215,8 @@ fn tick<
     const MAX_BLOCKS: usize,
     const MAX_BRANCH_COUNT: usize,
     const AVAILABLE_UTXO_BYTES: usize,
+    const MEMPOOL_COMPACT_BYTES: usize,
+    const MEMPOOL_MAX_ENTRIES: usize,
 >(
     bc: &mut Blockchain<
         C,
@@ -206,6 +227,8 @@ fn tick<
         MAX_BLOCKS,
         MAX_BRANCH_COUNT,
         AVAILABLE_UTXO_BYTES,
+        MEMPOOL_COMPACT_BYTES,
+        MEMPOOL_MAX_ENTRIES,
     >,
 ) -> NextCall {
     let (outcome, next) = bc.on_tick(now_ms());
@@ -235,6 +258,8 @@ fn found_chain<
     const MAX_BLOCKS: usize,
     const MAX_BRANCH_COUNT: usize,
     const AVAILABLE_UTXO_BYTES: usize,
+    const MEMPOOL_COMPACT_BYTES: usize,
+    const MEMPOOL_MAX_ENTRIES: usize,
 >(
     bc: &mut Blockchain<
         C,
@@ -245,6 +270,8 @@ fn found_chain<
         MAX_BLOCKS,
         MAX_BRANCH_COUNT,
         AVAILABLE_UTXO_BYTES,
+        MEMPOOL_COMPACT_BYTES,
+        MEMPOOL_MAX_ENTRIES,
     >,
     currency: u64,
     genesis_chain_config: &[u8],
